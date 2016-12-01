@@ -91,6 +91,31 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 
+import android.content.ContentResolver;
+import android.content.ContextWrapper;
+import android.content.ContentProvider;
+import android.content.ContentValues;
+import android.database.Cursor;
+import android.database.MatrixCursor;
+import android.preference.SwitchPreference;
+import android.preference.Preference.OnPreferenceChangeListener;
+import android.widget.CheckBox;
+import android.system.Os;
+import android.os.Environment;
+import android.content.SharedPreferences;
+import java.util.Properties;
+import java.lang.Boolean;
+import java.io.File;
+import java.io.OutputStream;
+import java.io.BufferedOutputStream;
+import java.io.FileOutputStream;
+import java.io.ObjectOutputStream;
+import java.io.FileWriter;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.BufferedReader;
+import java.io.FileNotFoundException;
+
 /**
  * Activity to display application information from Settings. This activity presents
  * extended information associated with a package like code, data, total size, permissions
@@ -121,6 +146,7 @@ public class InstalledAppDetails extends AppInfoBase
     private static final int DLG_DISABLE = DLG_BASE + 2;
     private static final int DLG_SPECIAL_DISABLE = DLG_BASE + 3;
     private static final int DLG_FACTORY_RESET = DLG_BASE + 4;
+    private static final int DLG_INCOG_APP_STOP = DLG_BASE + 5;
 
     private static final String KEY_HEADER = "header_view";
     private static final String KEY_NOTIFICATION = "notification_settings";
@@ -130,6 +156,9 @@ public class InstalledAppDetails extends AppInfoBase
     private static final String KEY_LAUNCH = "preferred_settings";
     private static final String KEY_BATTERY = "battery";
     private static final String KEY_MEMORY = "memory";
+    
+    // beware, the same filename is used in the framework
+    private static final String INCONGNITO_SETTING_FILE = "/sdcard/incog.config";
 
     private final HashSet<String> mHomePackages = new HashSet<String>();
 
@@ -145,6 +174,8 @@ public class InstalledAppDetails extends AppInfoBase
     private Preference mLaunchPreference;
     private Preference mDataPreference;
     private Preference mMemoryPreference;
+    private CheckBox mIncogCheckBox;
+    private boolean mIncognitoCurState;
 
     private boolean mDisableAfterUninstall;
     // Used for updating notification preference.
@@ -186,8 +217,106 @@ public class InstalledAppDetails extends AppInfoBase
     private boolean isDisabledUntilUsed() {
         return mAppEntry.info.enabledSetting
                 == PackageManager.COMPONENT_ENABLED_STATE_DISABLED_UNTIL_USED;
+   }
+    public boolean isExternalStorageAvailable(boolean needWriteAccess) {
+        String state = Environment.getExternalStorageState();
+    	Log.e("Tiramisu", "storage state is " + state);
+
+    	if (Environment.MEDIA_MOUNTED.equals(state)) {
+            return true;
+        } else if (!needWriteAccess &&
+                   Environment.MEDIA_MOUNTED_READ_ONLY.equals(state)) {
+           return true;
+        }
+    	return false;
+	}
+
+    public void updateIncognitoState(String packageName, boolean isIncognitoState) {
+        if (isExternalStorageAvailable(true)) {
+			File f = new File(INCONGNITO_SETTING_FILE);
+			try {
+				if (f.exists()) {
+					Log.d("Tiramisu", "Editing existing configuration file");
+				} else {
+					f.createNewFile();
+					Log.d("Tiramisu", "Creating configuration file");
+				}
+			} catch (Exception e) {
+		   		e.printStackTrace();
+			}
+
+            Properties config = new Properties();
+
+            try(FileReader fileReader = new FileReader(f)) {
+                config.load(fileReader);
+                config.setProperty(packageName, Boolean.toString(isIncognitoState));
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+
+            try(FileWriter fileWriter = new FileWriter(f)) {
+                config.store(fileWriter, "");
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        } else {
+			Log.e("Tiramisu", packageName + " Application does not have permission to access External storage");
+			Log.e("Tiramisu", packageName + " not opened in Incognito Mode");
+        }
+	}
+
+    public void onCheckBoxClicked(View view){
+        // get a confirmation from the user for force stopping the app
+        showDialogInner(DLG_INCOG_APP_STOP, 0);
     }
 
+
+    boolean getAppIncognitoState(String packageName) {
+        if (!isExternalStorageAvailable(true)) {
+			return false;
+		}
+
+		File f = new File(INCONGNITO_SETTING_FILE);
+ 		if (!f.exists()) {
+			return false;
+		}
+
+        Properties config = new Properties();
+
+        try(FileReader fileReader = new FileReader(f)) {
+            config.load(fileReader);
+            String value = config.getProperty(packageName);
+            if (value != null) {
+                switch(value) {
+                    case "true":
+                        return true;
+                    case "false":
+                    default:
+                        return false;
+                }
+            }
+        } catch (FileNotFoundException e) {
+            Log.d("Tiramisu", "App does not have permission to read external storage");
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+		return false;
+	}
+
+    /**
+     *  Set the checkbox state based on the current Incognito state
+     */
+    public void retrieveIncogState(){
+            String packageName = mAppEntry.info.packageName;
+            try {
+               mIncognitoCurState = getAppIncognitoState(packageName);
+               mIncogCheckBox.setChecked(mIncognitoCurState);
+            } catch (Exception e) {
+                Log.e(TAG, "New excpetion");
+            }
+    }
+    
     private void initUninstallButtons() {
         final boolean isBundled = (mAppEntry.info.flags & ApplicationInfo.FLAG_SYSTEM) != 0;
         boolean enabled = true;
@@ -376,6 +505,9 @@ public class InstalledAppDetails extends AppInfoBase
         mForceStopButton = (Button) btnPanel.findViewById(R.id.right_button);
         mForceStopButton.setText(R.string.force_stop);
         mUninstallButton = (Button) btnPanel.findViewById(R.id.left_button);
+        mIncogCheckBox = (CheckBox)mHeader.findViewById(R.id.checkbox1);
+        mIncogCheckBox.setOnClickListener(this);
+        retrieveIncogState();
         mForceStopButton.setEnabled(false);
     }
 
@@ -545,7 +677,7 @@ public class InstalledAppDetails extends AppInfoBase
         checkForceStop();
         setAppLabelAndIcon(mPackageInfo);
         initUninstallButtons();
-
+	mIncogCheckBox.setChecked(mIncognitoCurState);
         // Update the preference summaries.
         Activity context = getActivity();
         mStoragePreference.setSummary(AppStorageSettings.getSummary(mAppEntry, context));
@@ -673,6 +805,27 @@ public class InstalledAppDetails extends AppInfoBase
                         })
                         .setNegativeButton(R.string.dlg_cancel, null)
                         .create();
+           case DLG_INCOG_APP_STOP:
+                return new AlertDialog.Builder(getActivity())
+                        .setTitle(getActivity().getText(R.string.incognito_title))
+                        .setMessage(getActivity().getText(R.string.incognito_dlg_text))
+                        .setPositiveButton(R.string.dlg_ok, new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                // Force stop
+                                forceStopPackage(mAppEntry.info.packageName);
+
+                                // update the checkbox state
+                                mIncognitoCurState = !mIncognitoCurState;
+                                updateIncognitoState(mAppEntry.info.packageName, mIncognitoCurState);
+                            }
+                        })
+                        .setNegativeButton(R.string.dlg_cancel, new DialogInterface.OnClickListener() {
+                            public void onClick(DialogInterface dialog, int which) {
+                                mIncogCheckBox.setChecked(mIncognitoCurState);
+                            }
+                        })
+                        .create();
+
         }
         return null;
     }
@@ -763,8 +916,11 @@ public class InstalledAppDetails extends AppInfoBase
             setIntentAndFinish(true, true);
             return;
         }
-        String packageName = mAppEntry.info.packageName;
-        if(v == mUninstallButton) {
+        
+        if(v== mIncogCheckBox){
+            onCheckBoxClicked(v);
+        } else if(v == mUninstallButton) {
+            String packageName = mAppEntry.info.packageName;
             if ((mAppEntry.info.flags & ApplicationInfo.FLAG_SYSTEM) != 0) {
                 if (mAppEntry.info.enabled && !isDisabledUntilUsed()) {
                     if (mUpdatedSysApp) {

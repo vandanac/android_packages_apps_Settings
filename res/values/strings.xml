@@ -7053,5 +7053,9 @@
     <string name="color_temperature_desc">Use cooler display colors</string>
 
     <!-- Toast message letting the user know the color temperature setting is not immediate -->
+
     <string name="color_temperature_toast">To apply color change, turn off screen</string>
+    <string name="incognito_settings">Incognito Mode</string>
+    <string name="incognito_title">Incognito Mode</string>
+    <string name="incognito_dlg_text">Application will be force stopped if mode is changed.</string>
 </resources>
